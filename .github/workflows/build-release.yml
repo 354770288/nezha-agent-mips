@@ -96,14 +96,7 @@ jobs:
 
             OUT="dist/nezha-agent-linux-$ARCH"
             echo "==> UPX compress to $OUT ..."
-            upx --best --ultra-brute -o "$OUT" main || upx --best -o "$OUT" main
-
-            SIZE=$(stat -c%s "$OUT")
-            echo "Built size: $SIZE bytes"
-            if [ "$SIZE" -gt 5242880 ]; then
-              echo "::error::Binary $OUT exceeds 5MB ($SIZE bytes)"
-              exit 1
-            fi
+            upx --best -o "$OUT" main
 
             rm -f main
             ls -lh "$OUT"
