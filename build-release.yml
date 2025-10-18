@@ -1,0 +1,113 @@
+name: Build and Release Nezha Agent for MIPS
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      agent_ref:
+        description: "nezhahq/agent 的分支/标签/提交（测试用，空则取 main）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build mips and mipsle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide agent ref
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "release" ] && [ -n "${{ github.event.release.tag_name }}" ]; then
+            # 默认使用本仓库 Release 的 tag 名称作为 nezhahq/agent 的 ref
+            echo "ref=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.agent_ref }}" ]; then
+            echo "ref=${{ github.event.inputs.agent_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Using nezhahq/agent ref: $(cat $GITHUB_OUTPUT)"
+
+      - name: Checkout nezhahq/agent
+        uses: actions/checkout@v4
+        with:
+          repository: nezhahq/agent
+          ref: ${{ steps.ref.outputs.ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # 使用上一步检出的 nezhahq/agent 根目录中的 go.mod 指定版本
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install upx
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx || sudo apt-get install -y upx-ucl
+
+      - name: Build and compress (mips, mipsle)
+        run: |
+          set -euxo pipefail
+          mkdir -p dist
+
+          # 预拉取依赖，加速构建
+          go mod download
+
+          for ARCH in mips mipsle; do
+            echo "==> Building $ARCH ..."
+            # 按要求的构建参数
+            GOOS=linux GOARCH=$ARCH GOMIPS=softfloat \
+              go build -trimpath -ldflags "-s -w" -o main cmd/agent/main.go
+
+            OUT="dist/nezha-agent-linux-$ARCH"
+            echo "==> UPX compress to $OUT ..."
+            upx --best -o "$OUT" main
+
+            # 校验大小 < 5MB (5 * 1024 * 1024 = 5242880 bytes)
+            SIZE=$(stat -c%s "$OUT")
+            echo "Built size: $SIZE bytes"
+            if [ "$SIZE" -gt 5242880 ]; then
+              echo "::error::Binary $OUT exceeds 5MB ($SIZE bytes)"
+              exit 1
+            fi
+
+            rm -f main
+            ls -lh "$OUT"
+          done
+
+      - name: Create checksums
+        run: |
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      # 发布事件时把产物上传到当前 Release
+      - name: Upload assets to current release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: |
+            dist/nezha-agent-linux-mips
+            dist/nezha-agent-linux-mipsle
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          tag_name: ${{ github.event.release.tag_name }}
+
+      # 手动触发时，作为构件上传（不影响 Release），便于测试
+      - name: Upload artifacts (manual run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezha-agent-mips-build
+          path: |
+            dist/nezha-agent-linux-mips
+            dist/nezha-agent-linux-mipsle
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+    timeout-minutes: 30
