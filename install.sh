@@ -58,7 +58,7 @@ install_agent() {
     # 下载 Nezha Agent
     print_message "$GREEN" "下载 Nezha Agent..."
     cd "$INSTALL_DIR"
-    wget -O nezha-agent "$DOWNLOAD_URL"
+    wget -O nezha-agent "$DOWNLOAD_URL" --no-check-certificate
     
     if [ $? -ne 0 ]; then
         print_message "$RED" "下载失败！请检查网络连接"
