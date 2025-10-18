@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       agent_ref:
-        description: "nezhahq/agent 的分支/标签/提交（测试用，空则取 main）"
+        description: "nezhahq/agent 的分支/标签/提交（测试用，空则自动选择）"
         required: false
         default: ""
 
@@ -18,18 +18,47 @@ jobs:
     name: Build mips and mipsle
     runs-on: ubuntu-latest
     steps:
-      - name: Decide agent ref
+      - name: Resolve agent ref
         id: ref
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ] && [ -n "${{ github.event.release.tag_name }}" ]; then
-            # 默认使用本仓库 Release 的 tag 名称作为 nezhahq/agent 的 ref
-            echo "ref=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.agent_ref }}" ]; then
-            echo "ref=${{ github.event.inputs.agent_ref }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=main" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          REPO="nezhahq/agent"
+
+          # 1) 手动输入优先
+          CANDIDATE=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.agent_ref }}" ]; then
+            CANDIDATE="${{ github.event.inputs.agent_ref }}"
           fi
-          echo "Using nezhahq/agent ref: $(cat $GITHUB_OUTPUT)"
+
+          # 2) 其次尝试使用本仓库 Release 的标签名
+          if [ -z "$CANDIDATE" ] && [ "${{ github.event_name }}" = "release" ] && [ -n "${{ github.event.release.tag_name }}" ]; then
+            CANDIDATE="${{ github.event.release.tag_name }}"
+          fi
+
+          check_ref() {
+            local ref="$1"
+            if [ -z "$ref" ]; then return 1; fi
+            if gh api -X GET "repos/$REPO/git/ref/tags/$ref" >/dev/null 2>&1; then return 0; fi
+            if gh api -X GET "repos/$REPO/branches/$ref" >/dev/null 2>&1; then return 0; fi
+            return 1
+          }
+
+          REF=""
+          if check_ref "$CANDIDATE"; then
+            REF="$CANDIDATE"
+          else
+            LATEST_TAG="$(gh api "repos/$REPO/releases/latest" -q .tag_name || true)"
+            if check_ref "$LATEST_TAG"; then
+              REF="$LATEST_TAG"
+            else
+              DEFAULT_BRANCH="$(gh api "repos/$REPO" -q .default_branch || echo main)"
+              REF="$DEFAULT_BRANCH"
+            fi
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Using nezhahq/agent ref: $REF"
 
       - name: Checkout nezhahq/agent
         uses: actions/checkout@v4
@@ -40,7 +69,6 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          # 使用上一步检出的 nezhahq/agent 根目录中的 go.mod 指定版本
           go-version-file: go.mod
           cache: true
 
@@ -53,21 +81,23 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p dist
-
-          # 预拉取依赖，加速构建
           go mod download
 
           for ARCH in mips mipsle; do
             echo "==> Building $ARCH ..."
-            # 按要求的构建参数
-            GOOS=linux GOARCH=$ARCH GOMIPS=softfloat \
-              go build -trimpath -ldflags "-s -w" -o main cmd/agent/main.go
+            CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH GOMIPS=softfloat \
+              go build \
+                -trimpath \
+                -tags "netgo,osusergo" \
+                -gcflags "all=-l" \
+                -ldflags "-s -w -buildid=" \
+                -o main \
+                cmd/agent/main.go
 
             OUT="dist/nezha-agent-linux-$ARCH"
             echo "==> UPX compress to $OUT ..."
-            upx --best -o "$OUT" main
+            upx --best --ultra-brute -o "$OUT" main || upx --best -o "$OUT" main
 
-            # 校验大小 < 5MB (5 * 1024 * 1024 = 5242880 bytes)
             SIZE=$(stat -c%s "$OUT")
             echo "Built size: $SIZE bytes"
             if [ "$SIZE" -gt 5242880 ]; then
@@ -84,7 +114,6 @@ jobs:
           (cd dist && sha256sum * > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
 
-      # 发布事件时把产物上传到当前 Release
       - name: Upload assets to current release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
@@ -98,7 +127,6 @@ jobs:
           fail_on_unmatched_files: true
           tag_name: ${{ github.event.release.tag_name }}
 
-      # 手动触发时，作为构件上传（不影响 Release），便于测试
       - name: Upload artifacts (manual run)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
