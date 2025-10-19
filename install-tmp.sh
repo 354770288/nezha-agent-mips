@@ -160,11 +160,12 @@ EOF
 # tmpfs 模式安装
 install_agent_tmpfs() {
     print_message "$YELLOW" "\n开始安装 Nezha Agent (tmpfs 模式)..."
-    print_message "$YELLOW" "注意: tmpfs 模式下程序运行在内存中，重启后需要重新下载"
+    print_message "$YELLOW" "注意: tmpfs 模式下程序运行在内存中，重启后自动重新下载"
     
     # 检查是否已安装
     if [ -f "$INSTALL_MODE_FILE" ]; then
-        print_message "$RED" "检测到已安装 Nezha Agent！"
+        current_mode=$(cat "$INSTALL_MODE_FILE")
+        print_message "$RED" "检测到已安装 Nezha Agent (模式: $current_mode)"
         echo -n "是否覆盖安装？(y/n): "
         read confirm
         if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
@@ -175,22 +176,36 @@ install_agent_tmpfs() {
         cleanup_all_installations
     fi
     
-    # 创建持久化配置目录 (只存配置文件)
+    # 创建持久化配置目录
     print_message "$GREEN" "创建配置目录..."
     mkdir -p "$INSTALL_DIR"
     
-    # 获取用户配置
-    print_message "$GREEN" "\n请输入配置信息："
-    echo -n "请输入 Server 地址(例如: data.example.com:8008): "
-    read server_addr
-    echo -n "请输入 UUID: "
-    read uuid
-    echo -n "请输入 Client Secret: "
-    read client_secret
-    
-    # 创建配置文件 (保存在持久化存储)
-    print_message "$GREEN" "创建配置文件..."
-    cat > "$CONFIG_FILE" <<EOF
+    # 检查是否已有配置文件
+    if [ -f "$CONFIG_FILE" ]; then
+        print_message "$YELLOW" "\n检测到已存在的配置文件！"
+        current_server=$(grep "^server:" "$CONFIG_FILE" | awk '{print $2}')
+        current_uuid=$(grep "^uuid:" "$CONFIG_FILE" | awk '{print $2}')
+        echo "当前 Server: $current_server"
+        echo "当前 UUID: $current_uuid"
+        echo ""
+        echo -n "是否使用现有配置？(y/n): "
+        read use_existing
+        
+        if [ "$use_existing" = "y" ] || [ "$use_existing" = "Y" ]; then
+            print_message "$GREEN" "使用现有配置"
+        else
+            # 重新输入配置
+            print_message "$GREEN" "\n请输入新的配置信息："
+            echo -n "请输入 Server 地址(例如: data.example.com:8008): "
+            read server_addr
+            echo -n "请输入 UUID: "
+            read uuid
+            echo -n "请输入 Client Secret: "
+            read client_secret
+            
+            # 创建新配置文件
+            print_message "$GREEN" "创建新配置文件..."
+            cat > "$CONFIG_FILE" <<EOF
 client_secret: $client_secret
 debug: false
 disable_auto_update: false
@@ -211,6 +226,41 @@ use_gitee_to_upgrade: false
 use_ipv6_country_code: false
 uuid: $uuid
 EOF
+        fi
+    else
+        # 首次安装，获取用户配置
+        print_message "$GREEN" "\n请输入配置信息："
+        echo -n "请输入 Server 地址(例如: data.example.com:8008): "
+        read server_addr
+        echo -n "请输入 UUID: "
+        read uuid
+        echo -n "请输入 Client Secret: "
+        read client_secret
+        
+        # 创建配置文件
+        print_message "$GREEN" "创建配置文件..."
+        cat > "$CONFIG_FILE" <<EOF
+client_secret: $client_secret
+debug: false
+disable_auto_update: false
+disable_command_execute: false
+disable_force_update: false
+disable_nat: false
+disable_send_query: false
+gpu: false
+insecure_tls: false
+ip_report_period: 1800
+report_delay: 1
+server: $server_addr
+skip_connection_count: false
+skip_procs_count: false
+temperature: false
+tls: false
+use_gitee_to_upgrade: false
+use_ipv6_country_code: false
+uuid: $uuid
+EOF
+    fi
     
     # 记录安装模式
     echo "tmpfs" > "$INSTALL_MODE_FILE"
@@ -304,6 +354,7 @@ BOOTSTRAP_EOF
     if ps aux | grep nezha-agent | grep -v grep > /dev/null; then
         print_message "$GREEN" "\n安装成功！Nezha Agent 正在运行 (tmpfs 模式)"
         print_message "$YELLOW" "提示: 每次重启后会自动从网络下载并启动"
+        print_message "$YELLOW" "配置已持久化保存在: $CONFIG_FILE"
         print_message "$YELLOW" "日志文件: /tmp/nezha-bootstrap.log"
     else
         print_message "$RED" "\n服务启动失败，请查看日志: cat /tmp/nezha-bootstrap.log"
