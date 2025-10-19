@@ -137,7 +137,7 @@ EOF
     
     # 验证安装
     sleep 3
-    if ps | grep -v grep | grep nezha-agent > /dev/null; then
+    if ps aux | grep nezha-agent | grep -v grep > /dev/null; then
         print_message "$GREEN" "\n安装成功！Nezha Agent 正在运行"
     else
         print_message "$RED" "\n安装完成但服务未启动，请检查配置"
@@ -201,10 +201,10 @@ check_status() {
     fi
     
     # 检查进程
-    if ps | grep -v grep | grep nezha-agent > /dev/null; then
+    if ps aux | grep nezha-agent | grep -v grep > /dev/null; then
         print_message "$GREEN" "服务状态: 运行中"
         echo ""
-        ps | grep nezha-agent | grep -v grep
+        ps aux | grep nezha-agent | grep -v grep
     else
         print_message "$RED" "服务状态: 未运行"
     fi
@@ -231,7 +231,7 @@ restart_service() {
     /etc/init.d/nezha-service restart
     
     sleep 3
-    if ps | grep -v grep | grep nezha-agent > /dev/null; then
+    if ps aux | grep nezha-agent | grep -v grep > /dev/null; then
         print_message "$GREEN" "服务重启成功！"
     else
         print_message "$RED" "服务重启失败！请检查日志: logread"
